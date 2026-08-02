@@ -1,7 +1,7 @@
 use crate::io_util::ensure_absent;
 use crate::{
-    Algorithm, MAX_KEY_SIZE, Mode, generate_random_key_in, make_deterministic_key_in,
-    process_file_in, xor_file_in_place,
+    Algorithm, MAX_KEY_SIZE, Mode, binary_key_to_text_in, generate_random_key_in,
+    make_deterministic_key_in, process_file_in, text_to_binary_key_in, xor_file_in_place,
 };
 use anyhow::{Context, Result, bail};
 use std::ffi::OsString;
@@ -78,6 +78,42 @@ fn keymake_command() -> Result<()> {
     }
     make_deterministic_key_in(&directory, size, password.as_bytes())?;
     println!("created deterministic keymake.key with exactly {size} bytes");
+    Ok(())
+}
+
+pub fn key2txt_main() {
+    exit_on_error(key2txt_command());
+}
+
+fn key2txt_command() -> Result<()> {
+    let arguments: Vec<OsString> = std::env::args_os().collect();
+    if arguments.len() != 2 {
+        bail!("usage: key2txt [binary key file]");
+    }
+    let directory = std::env::current_dir().context("cannot determine current directory")?;
+    binary_key_to_text_in(&directory, &arguments[1])?;
+    println!(
+        "converted binary key '{}' to key2txt.txt",
+        arguments[1].to_string_lossy()
+    );
+    Ok(())
+}
+
+pub fn txt2key_main() {
+    exit_on_error(txt2key_command());
+}
+
+fn txt2key_command() -> Result<()> {
+    let arguments: Vec<OsString> = std::env::args_os().collect();
+    if arguments.len() != 2 {
+        bail!("usage: txt2key [decimal text file]");
+    }
+    let directory = std::env::current_dir().context("cannot determine current directory")?;
+    text_to_binary_key_in(&directory, &arguments[1])?;
+    println!(
+        "restored decimal key text '{}' to txt2key.key",
+        arguments[1].to_string_lossy()
+    );
     Ok(())
 }
 

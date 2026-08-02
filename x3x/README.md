@@ -96,6 +96,36 @@ attackers can recognize equal password-and-size inputs and perform offline
 password guesses. Use a long, unique passphrase. For maximum-entropy cipher
 keys, prefer keygen.
 
+## Key text converters
+
+~~~text
+key2txt binary-key-file
+txt2key decimal-text-file
+~~~
+
+key2txt streams a binary key into key2txt.txt as unsigned decimal byte values.
+Every value is on its own line. A comma follows every value except the final
+one, so a five-byte key is represented as:
+
+~~~text
+23,
+255,
+53,
+9,
+5
+~~~
+
+txt2key reverses this representation into txt2key.key. It requires exactly one
+value from 0 through 255 per nonempty line. Plain lines without commas are also
+accepted, as are CRLF line endings, surrounding ASCII spaces or tabs, and an
+optional trailing comma. Signs, blank lines, multiple values on one line,
+non-decimal data, more than three digits, and values above 255 are rejected.
+
+Both tools stream in bounded memory, require the input filename to be in the
+current directory, and refuse to overwrite their fixed output files. The text
+representation exposes every secret key byte and must be protected just as
+carefully as the original binary key.
+
 ## OTP tool
 
 ~~~text
@@ -123,7 +153,9 @@ cargo test --test tools keymake_is_deterministic_and_not_a_repeated_short_block 
 
 The normal tests cover all eight cipher round trips across chunk boundaries,
 empty files, fresh nonces, wrong keys, tampering, no-overwrite behavior,
-streamed OTP, and exact-size key generation. The explicitly ignored test runs
-the full production Argon2id settings twice and verifies deterministic,
+streamed OTP, exact-size key generation, actual key2txt/txt2key process-level
+round trips, converter buffer boundaries, accepted text variants, malformed
+input rejection, and converter no-overwrite behavior. The explicitly ignored
+test runs the full production Argon2id settings twice and verifies deterministic,
 nonrepeating keymake output; it is separate so routine test runs do not allocate
 256 MiB twice.
