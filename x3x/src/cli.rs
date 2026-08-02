@@ -1,7 +1,8 @@
 use crate::io_util::ensure_absent;
 use crate::{
     Algorithm, MAX_KEY_SIZE, Mode, binary_key_to_text_in, generate_random_key_in,
-    make_deterministic_key_in, process_file_in, text_to_binary_key_in, xor_file_in_place,
+    make_deterministic_key_in, process_file_in, process_password_file_in, text_to_binary_key_in,
+    xor_file_in_place,
 };
 use anyhow::{Context, Result, bail};
 use std::ffi::OsString;
@@ -27,6 +28,57 @@ fn cipher_command(algorithm: Algorithm) -> Result<()> {
     process_file_in(&directory, algorithm, mode, &arguments[2], &arguments[3])?;
     println!(
         "{algorithm} {} complete: '{}' -> '{}'",
+        if mode == Mode::Encrypt {
+            "encryption"
+        } else {
+            "decryption"
+        },
+        arguments[2].to_string_lossy(),
+        arguments[3].to_string_lossy()
+    );
+    Ok(())
+}
+
+pub fn password_cipher_main(algorithm: Algorithm) {
+    exit_on_error(password_cipher_command(algorithm));
+}
+
+fn password_cipher_command(algorithm: Algorithm) -> Result<()> {
+    let arguments: Vec<OsString> = std::env::args_os().collect();
+    if arguments.len() != 4 {
+        bail!(
+            "usage: {} [E or D] [filename] [output-file]",
+            algorithm.password_command()
+        );
+    }
+    let operation = arguments[1]
+        .to_str()
+        .context("operation must be valid Unicode and exactly E or D")?;
+    let mode = Mode::parse(operation)?;
+
+    let password =
+        Zeroizing::new(rpassword::prompt_password("Password: ").context("cannot read password")?);
+    if mode == Mode::Encrypt {
+        let confirmation = Zeroizing::new(
+            rpassword::prompt_password("Password again: ")
+                .context("cannot read password confirmation")?,
+        );
+        if password.as_bytes() != confirmation.as_bytes() {
+            bail!("passwords do not match");
+        }
+    }
+
+    let directory = std::env::current_dir().context("cannot determine current directory")?;
+    process_password_file_in(
+        &directory,
+        algorithm,
+        mode,
+        &arguments[2],
+        &arguments[3],
+        password.as_bytes(),
+    )?;
+    println!(
+        "{algorithm} password-based {} complete: '{}' -> '{}'",
         if mode == Mode::Encrypt {
             "encryption"
         } else {

@@ -16,21 +16,21 @@ cargo build --release --bins
 ~~~
 
 The executables are placed in target/release. Each one can be copied and used
-independently, though the cipher programs always look for their fixed key file
-in the current working directory.
+independently. The original cipher programs look for their fixed key file in
+the current working directory; the password variants do not use key files.
 
 ## Cipher binaries
 
-| Binary | Construction | Required key file | Exact key size |
-| --- | --- | --- | ---: |
-| aes | AES-256-GCM-SIV | aes.key | 32 bytes |
-| cha | XChaCha20-Poly1305 | cha.key | 32 bytes |
-| ser | Serpent-256-CTR with HMAC-SHA-512 | ser.key | 32 bytes |
-| thf | Threefish-1024-CTR with HMAC-SHA-512 | thf.key | 128 bytes |
-| asc | Ascon-AEAD128 | asc.key | 16 bytes |
-| rabbit | Rabbit with HMAC-SHA-512 | rab.key | 16 bytes |
-| aegis256 | AEGIS-256 | aegis256.key | 32 bytes |
-| aegis128l | AEGIS-128L | aegis128l.key | 16 bytes |
+| Key binary | Password binary | Construction | Required key file | Exact key size |
+| --- | --- | --- | --- | ---: |
+| aes | aesp | AES-256-GCM-SIV | aes.key | 32 bytes |
+| cha | chap | XChaCha20-Poly1305 | cha.key | 32 bytes |
+| ser | serp | Serpent-256-CTR with HMAC-SHA-512 | ser.key | 32 bytes |
+| thf | thfp | Threefish-1024-CTR with HMAC-SHA-512 | thf.key | 128 bytes |
+| asc | ascp | Ascon-AEAD128 | asc.key | 16 bytes |
+| rabbit | rabbitp | Rabbit with HMAC-SHA-512 | rab.key | 16 bytes |
+| aegis256 | aegis256p | AEGIS-256 | aegis256.key | 32 bytes |
+| aegis128l | aegis128lp | AEGIS-128L | aegis128l.key | 16 bytes |
 
 The AEGIS crate is compiled with its pure-Rust backend. Serpent, Threefish, and
 Rabbit are unauthenticated primitives, so x3x derives independent per-file
@@ -61,6 +61,36 @@ underlying primitive. Files are streamed in 1 MiB chunks. AEAD ciphers
 authenticate each chunk independently with its position and file metadata;
 legacy constructions authenticate the complete ciphertext. See FORMAT.md for
 the exact format.
+
+## Password cipher binaries
+
+The password binaries have the same file interface and add p to the command:
+
+~~~text
+aesp E filename output-file
+aesp D filename output-file
+~~~
+
+Encryption prompts for the password twice; decryption prompts once. Password
+input is hidden and is held in zeroizing memory. These binaries neither read
+nor create an external key file.
+
+Every encryption generates a fresh 32-byte operating-system random salt. The
+password and salt are processed with Argon2id v1.3 using 512 MiB of memory, four
+passes, and four lanes to derive a 64-byte root key. HKDF-SHA-512 then derives a
+separate, algorithm-specific internal key of the exact required size. This
+allows Threefish to receive a full 128-byte internal key without stretching a
+short cipher key by repetition.
+
+Password files use container version 2 and record their bounded KDF parameters.
+The salt, algorithm, parameters, plaintext length, and all ciphertext are
+authenticated by the selected construction. Key-file binaries only accept
+version 1; password binaries only accept version 2 and report which matching
+command to use.
+
+Argon2id makes password guessing expensive but cannot add entropy to a weak
+password. Use a long, unique passphrase. Losing the password makes the data
+unrecoverable.
 
 ## Random key generator
 
@@ -148,14 +178,18 @@ Reusing an OTP key destroys its security.
 cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-targets
+cargo test --release --lib crypto::tests::production_password_kdf_round_trips -- --ignored --exact
 cargo test --test tools keymake_is_deterministic_and_not_a_repeated_short_block -- --ignored --exact
 ~~~
 
-The normal tests cover all eight cipher round trips across chunk boundaries,
-empty files, fresh nonces, wrong keys, tampering, no-overwrite behavior,
-streamed OTP, exact-size key generation, actual key2txt/txt2key process-level
-round trips, converter buffer boundaries, accepted text variants, malformed
-input rejection, and converter no-overwrite behavior. The explicitly ignored
-test runs the full production Argon2id settings twice and verifies deterministic,
-nonrepeating keymake output; it is separate so routine test runs do not allocate
-256 MiB twice.
+The normal tests cover all eight key-file cipher round trips across chunk
+boundaries and all eight password cipher round trips, wrong-password rejection,
+fresh salts, authenticated password metadata, format separation, and the
+standalone command wiring of every password binary. They also cover empty
+files, fresh nonces, wrong keys, tampering, no-overwrite behavior, streamed OTP,
+exact-size key generation, actual key2txt/txt2key process-level round trips,
+converter buffer boundaries, accepted text variants, malformed input rejection,
+and converter no-overwrite behavior. The explicitly ignored tests exercise a
+complete password-file round trip at its production 512 MiB cost and run
+keymake's full 256 MiB settings twice. They are separate so routine tests do not
+make those large allocations.

@@ -1,15 +1,30 @@
+use super::password::{KDF_ID_ARGON2ID, PasswordKdf};
 use crate::Algorithm;
 use anyhow::{Result, bail};
 
 pub(super) const HEADER_LEN: usize = 64;
 const MAGIC: &[u8; 8] = b"X3XCRYPT";
-const FORMAT_VERSION: u8 = 1;
+const KEY_FILE_FORMAT_VERSION: u8 = 1;
+const PASSWORD_FORMAT_VERSION: u8 = 2;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Keying {
+    KeyFile,
+    Password(PasswordKdf),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ExpectedKeying {
+    KeyFile,
+    Password,
+}
 
 #[derive(Clone)]
 pub(super) struct Header {
     bytes: [u8; HEADER_LEN],
     pub(super) plaintext_len: u64,
     pub(super) nonce_seed: [u8; 32],
+    pub(super) keying: Keying,
 }
 
 impl Header {
@@ -18,10 +33,20 @@ impl Header {
         plaintext_len: u64,
         nonce_seed: [u8; 32],
         chunk_size: usize,
+        keying: Keying,
     ) -> Self {
         let mut bytes = [0_u8; HEADER_LEN];
         bytes[..8].copy_from_slice(MAGIC);
-        bytes[8] = FORMAT_VERSION;
+        bytes[8] = match keying {
+            Keying::KeyFile => KEY_FILE_FORMAT_VERSION,
+            Keying::Password(parameters) => {
+                bytes[56..60].copy_from_slice(&parameters.memory_kib.to_le_bytes());
+                bytes[60..62].copy_from_slice(&parameters.iterations.to_le_bytes());
+                bytes[62] = parameters.lanes;
+                bytes[63] = KDF_ID_ARGON2ID;
+                PASSWORD_FORMAT_VERSION
+            }
+        };
         bytes[9] = algorithm.id();
         bytes[10] = u8::try_from(algorithm.tag_len()).expect("tag length fits in u8");
         bytes[11] = u8::try_from(algorithm.nonce_len()).expect("nonce length fits in u8");
@@ -36,6 +61,7 @@ impl Header {
             bytes,
             plaintext_len,
             nonce_seed,
+            keying,
         }
     }
 
@@ -43,12 +69,10 @@ impl Header {
         bytes: [u8; HEADER_LEN],
         expected_algorithm: Algorithm,
         expected_chunk_size: usize,
+        expected_keying: ExpectedKeying,
     ) -> Result<Self> {
         if &bytes[..8] != MAGIC {
             bail!("input is not an x3x encrypted file");
-        }
-        if bytes[8] != FORMAT_VERSION {
-            bail!("unsupported x3x format version {}", bytes[8]);
         }
         let actual_algorithm = Algorithm::from_id(bytes[9])?;
         if actual_algorithm != expected_algorithm {
@@ -56,6 +80,36 @@ impl Header {
                 "file uses {actual_algorithm}, not {expected_algorithm}; use the matching binary"
             );
         }
+        let keying = match bytes[8] {
+            KEY_FILE_FORMAT_VERSION => {
+                if expected_keying == ExpectedKeying::Password {
+                    bail!(
+                        "file uses a key file; use the '{}' binary",
+                        expected_algorithm.command()
+                    );
+                }
+                if bytes[56..].iter().any(|byte| *byte != 0) {
+                    bail!("encrypted file header has nonzero reserved bytes");
+                }
+                Keying::KeyFile
+            }
+            PASSWORD_FORMAT_VERSION => {
+                if expected_keying == ExpectedKeying::KeyFile {
+                    bail!(
+                        "file is password-protected; use the '{}' binary",
+                        expected_algorithm.password_command()
+                    );
+                }
+                if bytes[63] != KDF_ID_ARGON2ID {
+                    bail!("unsupported password KDF identifier {}", bytes[63]);
+                }
+                let memory_kib = u32::from_le_bytes(bytes[56..60].try_into().expect("fixed slice"));
+                let iterations = u16::from_le_bytes(bytes[60..62].try_into().expect("fixed slice"));
+                let parameters = PasswordKdf::from_header(memory_kib, iterations, bytes[62])?;
+                Keying::Password(parameters)
+            }
+            version => bail!("unsupported x3x format version {version}"),
+        };
         if usize::from(bytes[10]) != expected_algorithm.tag_len()
             || usize::from(bytes[11]) != expected_algorithm.nonce_len()
         {
@@ -65,10 +119,6 @@ impl Header {
         if usize::try_from(chunk_size).ok() != Some(expected_chunk_size) {
             bail!("unsupported encrypted file chunk size {chunk_size}");
         }
-        if bytes[56..].iter().any(|byte| *byte != 0) {
-            bail!("encrypted file header has nonzero reserved bytes");
-        }
-
         let plaintext_len = u64::from_le_bytes(bytes[16..24].try_into().expect("fixed slice"));
         let mut nonce_seed = [0_u8; 32];
         nonce_seed.copy_from_slice(&bytes[24..56]);
@@ -76,6 +126,7 @@ impl Header {
             bytes,
             plaintext_len,
             nonce_seed,
+            keying,
         })
     }
 

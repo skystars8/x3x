@@ -97,6 +97,21 @@ impl Algorithm {
             Self::Aegis128L => "aegis128l",
         }
     }
+
+    /// Command name of the standalone password-based binary for this algorithm.
+    #[must_use]
+    pub const fn password_command(self) -> &'static str {
+        match self {
+            Self::Aes256GcmSiv => "aesp",
+            Self::XChaCha20Poly1305 => "chap",
+            Self::Serpent256 => "serp",
+            Self::Threefish1024 => "thfp",
+            Self::AsconAead128 => "ascp",
+            Self::Rabbit => "rabbitp",
+            Self::Aegis256 => "aegis256p",
+            Self::Aegis128L => "aegis128lp",
+        }
+    }
 }
 
 impl fmt::Display for Algorithm {
