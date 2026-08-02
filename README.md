@@ -2,6 +2,8 @@
 
 
 
+[![Rust build and test](https://github.com/skystars8/x3x/actions/workflows/rust.yml/badge.svg)](https://github.com/skystars8/x3x/actions/workflows/rust.yml)
+
 # x3x  
 
 
