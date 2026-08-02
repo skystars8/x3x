@@ -11,14 +11,15 @@ permissions:
 jobs:
   verify:
     name: Compile and test
-    strategy:
-  matrix:
-    os:
-      - windows-latest
-      - ubuntu-latest
-      - macos-latest
 
-runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os:
+          - windows-latest
+          - ubuntu-latest
+          - macos-latest
+
+    runs-on: ${{ matrix.os }}
 
     defaults:
       run:
