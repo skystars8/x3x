@@ -1,7 +1,7 @@
 
 # x3x  
 
-<img width="642" height="356" alt="pppppppppppp" src="https://github.com/user-attachments/assets/32afba07-4be2-4415-831a-6f255be7db35" />
+
 
 
 
