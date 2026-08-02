@@ -1,0 +1,97 @@
+#[path = "common/process.rs"]
+mod process;
+
+use process::{assert_failure_contains, assert_success, run, run_in, stdout};
+use std::fs;
+
+const BINARY: &str = env!("CARGO_BIN_EXE_keygen");
+
+#[test]
+fn reports_usage_for_wrong_argument_counts() {
+    for arguments in [Vec::<&str>::new(), vec!["1", "extra"]] {
+        assert_failure_contains(&run(BINARY, &arguments), "usage: keygen [size in bytes]");
+    }
+}
+
+#[test]
+fn rejects_non_decimal_sizes() {
+    for size in ["abc", "1.0", "++1", "-1", " 1", "1 ", "1KiB"] {
+        assert_failure_contains(&run(BINARY, &[size]), "invalid byte count");
+    }
+}
+
+#[test]
+fn rejects_sizes_outside_the_documented_range() {
+    for size in ["0", "20000000001", "18446744073709551615"] {
+        assert_failure_contains(
+            &run(BINARY, &[size]),
+            "size must be an exact byte count from 1 through 20000000000",
+        );
+    }
+}
+
+#[test]
+fn creates_exact_requested_sizes() {
+    for size in [1_usize, 32, 4097, 1024 * 1024 + 17] {
+        let directory = tempfile::tempdir().expect("create keygen test directory");
+        let output = run_in(BINARY, directory.path(), &[&size.to_string()]);
+        assert_success(&output);
+        assert_eq!(
+            fs::metadata(directory.path().join("keygen.key"))
+                .expect("inspect generated key")
+                .len(),
+            size as u64
+        );
+    }
+}
+
+#[test]
+fn reports_the_created_size() {
+    let directory = tempfile::tempdir().expect("create keygen test directory");
+    let output = run_in(BINARY, directory.path(), &["73"]);
+    assert_success(&output);
+    assert!(stdout(&output).contains("created keygen.key with exactly 73 random bytes"));
+}
+
+#[test]
+fn generated_key_is_not_an_all_zero_buffer() {
+    let directory = tempfile::tempdir().expect("create keygen test directory");
+    assert_success(&run_in(BINARY, directory.path(), &["4096"]));
+    let key = fs::read(directory.path().join("keygen.key")).expect("read generated key");
+    assert!(key.iter().any(|byte| *byte != 0));
+}
+
+#[test]
+fn separate_runs_use_fresh_randomness() {
+    let first_directory = tempfile::tempdir().expect("create first keygen test directory");
+    let second_directory = tempfile::tempdir().expect("create second keygen test directory");
+    assert_success(&run_in(BINARY, first_directory.path(), &["64"]));
+    assert_success(&run_in(BINARY, second_directory.path(), &["64"]));
+    assert_ne!(
+        fs::read(first_directory.path().join("keygen.key")).expect("read first key"),
+        fs::read(second_directory.path().join("keygen.key")).expect("read second key")
+    );
+}
+
+#[test]
+fn refuses_to_overwrite_an_existing_key() {
+    let directory = tempfile::tempdir().expect("create keygen test directory");
+    fs::write(directory.path().join("keygen.key"), b"preserve me").expect("write existing key");
+    let output = run_in(BINARY, directory.path(), &["32"]);
+    assert_failure_contains(&output, "refusing to overwrite existing file");
+    assert_eq!(
+        fs::read(directory.path().join("keygen.key")).expect("read preserved key"),
+        b"preserve me"
+    );
+}
+
+#[test]
+fn successful_run_leaves_only_the_requested_key_file() {
+    let directory = tempfile::tempdir().expect("create keygen test directory");
+    assert_success(&run_in(BINARY, directory.path(), &["257"]));
+    let entries: Vec<_> = fs::read_dir(directory.path())
+        .expect("list keygen directory")
+        .map(|entry| entry.expect("read directory entry").file_name())
+        .collect();
+    assert_eq!(entries, ["keygen.key"]);
+}

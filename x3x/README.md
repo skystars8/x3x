@@ -174,6 +174,24 @@ Reusing an OTP key destroys its security.
 
 ## Verification
 
+To run the dedicated test suite for every executable, one binary at a time:
+
+~~~text
+.\test-each.bat
+~~~
+
+The runner is fail-fast. It starts a separate Cargo test target for each of the
+21 binaries and uses one test thread inside each target. To run just one
+binary's suite, name its bin-prefixed integration target directly; for example:
+
+~~~text
+cargo test --test bin_aes -- --test-threads=1
+cargo test --test bin_keygen -- --test-threads=1
+~~~
+
+The broader library and cross-binary checks remain available through the usual
+commands:
+
 ~~~text
 cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
