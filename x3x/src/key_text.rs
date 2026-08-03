@@ -1,7 +1,7 @@
 use crate::io_util::{IO_BUFFER_SIZE, NewOutput, local_path, open_regular_file};
 use anyhow::{Context, Result, bail};
 use std::ffi::OsStr;
-use std::io::{BufReader, Read, Write};
+use std::io::{Read, Write};
 use std::path::Path;
 use zeroize::{Zeroize, Zeroizing};
 
@@ -20,13 +20,12 @@ const BINARY_OUTPUT: &str = "txt2key.key";
 pub fn binary_key_to_text_in(directory: &Path, input_name: &OsStr) -> Result<()> {
     let input_path = local_path(directory, input_name)?;
     let output_path = directory.join(TEXT_OUTPUT);
-    let input = open_regular_file(&input_path)?;
+    let mut input = open_regular_file(&input_path)?;
     let input_len = input
         .metadata()
         .with_context(|| format!("cannot inspect input '{}'", input_path.display()))?
         .len();
 
-    let mut reader = BufReader::with_capacity(IO_BUFFER_SIZE, input);
     let mut output = NewOutput::create(&output_path)?;
     let mut binary = Zeroizing::new(vec![0_u8; IO_BUFFER_SIZE]);
     let text_capacity = IO_BUFFER_SIZE
@@ -39,7 +38,7 @@ pub fn binary_key_to_text_in(directory: &Path, input_name: &OsStr) -> Result<()>
     while remaining != 0 {
         let length = usize::try_from(remaining.min(IO_BUFFER_SIZE as u64))
             .context("input chunk length does not fit this platform")?;
-        reader
+        input
             .read_exact(&mut binary[..length])
             .context("binary key changed or ended while being converted")?;
 
@@ -63,7 +62,7 @@ pub fn binary_key_to_text_in(directory: &Path, input_name: &OsStr) -> Result<()>
     }
 
     let mut extra = [0_u8; 1];
-    if reader.read(&mut extra)? != 0 {
+    if input.read(&mut extra)? != 0 {
         bail!("binary key grew while being converted");
     }
     output.finish()
@@ -81,16 +80,15 @@ pub fn binary_key_to_text_in(directory: &Path, input_name: &OsStr) -> Result<()>
 pub fn text_to_binary_key_in(directory: &Path, input_name: &OsStr) -> Result<()> {
     let input_path = local_path(directory, input_name)?;
     let output_path = directory.join(BINARY_OUTPUT);
-    let input = open_regular_file(&input_path)?;
+    let mut input = open_regular_file(&input_path)?;
 
-    let mut reader = BufReader::with_capacity(IO_BUFFER_SIZE, input);
     let mut output = NewOutput::create(&output_path)?;
     let mut input_buffer = Zeroizing::new(vec![0_u8; IO_BUFFER_SIZE]);
     let mut binary_buffer = Zeroizing::new(Vec::with_capacity(IO_BUFFER_SIZE));
     let mut parser = DecimalLineParser::new();
 
     loop {
-        let length = reader
+        let length = input
             .read(&mut input_buffer)
             .context("cannot read decimal key text")?;
         if length == 0 {

@@ -167,7 +167,17 @@ OTP is the one intentional in-place tool because its requested interface has no
 output argument. It verifies that the key is at least as long as the input
 before changing anything, streams both files in bounded memory, writes a
 same-directory temporary file, syncs it, and atomically replaces only the named
-input. Running it again with the same key restores the original bytes.
+input after revalidating that the pathname still identifies the file that was
+opened. Running it again with the same key restores the original bytes.
+Portable file APIs cannot make that identity check and pathname replacement one
+indivisible operation, so do not run OTP in a directory concurrently writable
+by an untrusted process.
+
+OTP preserves Unix mode bits and the Windows read-only flag. Atomic replacement
+cannot portably preserve ACLs, extended attributes, security labels, ownership,
+timestamps, or other platform-specific metadata, so copy or restore those
+separately when they matter. Symbolic-link inputs are rejected because replacing
+a link would replace the link itself rather than its target.
 
 For actual one-time-pad security, key bytes must be uniformly random, at least
 as long as the message, kept secret, and never reused for any other message.

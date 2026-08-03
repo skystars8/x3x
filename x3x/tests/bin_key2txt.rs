@@ -27,6 +27,20 @@ fn converts_a_binary_key_to_documented_decimal_text() {
 }
 
 #[test]
+fn converts_a_short_unicode_filename_without_panicking() {
+    let directory = tempfile::tempdir().expect("create key2txt test directory");
+    fs::write(directory.path().join("abé"), [1_u8, 2, 3]).expect("write Unicode-named key");
+
+    let output = run_in(BINARY, directory.path(), &["abé"]);
+
+    assert_success(&output);
+    assert_eq!(
+        fs::read(directory.path().join("key2txt.txt")).expect("read converted Unicode-named key"),
+        b"1,\n2,\n3\n"
+    );
+}
+
+#[test]
 fn converts_every_possible_byte_value() {
     let directory = tempfile::tempdir().expect("create key2txt test directory");
     let input: Vec<u8> = (0_u8..=u8::MAX).collect();
@@ -94,7 +108,14 @@ fn rejects_a_missing_input_without_output() {
 
 #[test]
 fn rejects_nonlocal_and_nonportable_input_names() {
-    for input in ["folder/key", "folder\\key", "bad:name", "NUL", "trailing."] {
+    for input in [
+        "folder/key",
+        "folder\\key",
+        "bad:name",
+        "NUL",
+        "COM¹",
+        "trailing.",
+    ] {
         let directory = tempfile::tempdir().expect("create key2txt test directory");
         let output = run_in(BINARY, directory.path(), &[input]);
         assert_failure_contains(&output, "error:");

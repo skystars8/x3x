@@ -5,14 +5,12 @@ mod password;
 
 use self::format::{ExpectedKeying, Header, Keying};
 use self::password::{PasswordKdf, derive_key};
-use crate::io_util::{
-    IO_BUFFER_SIZE, NewOutput, ensure_absent, files_are_same, local_path, open_regular_file,
-};
+use crate::io_util::{NewOutput, ensure_absent, files_are_same, local_path, open_regular_file};
 use crate::{Algorithm, Mode};
 use anyhow::{Context, Result, bail};
 use std::ffi::OsStr;
 use std::fs::File;
-use std::io::{BufReader, Read};
+use std::io::Read;
 use std::path::Path;
 use zeroize::Zeroizing;
 
@@ -147,7 +145,7 @@ fn process_password_file_with_kdf_in(
     }
 }
 
-fn read_key(file: File, path: &Path, expected_len: usize) -> Result<Zeroizing<Vec<u8>>> {
+fn read_key(mut file: File, path: &Path, expected_len: usize) -> Result<Zeroizing<Vec<u8>>> {
     let actual_len = file
         .metadata()
         .with_context(|| format!("cannot inspect key '{}'", path.display()))?
@@ -159,13 +157,11 @@ fn read_key(file: File, path: &Path, expected_len: usize) -> Result<Zeroizing<Ve
         );
     }
 
-    let mut reader = BufReader::new(file);
     let mut key = Zeroizing::new(vec![0_u8; expected_len]);
-    reader
-        .read_exact(&mut key)
+    file.read_exact(&mut key)
         .with_context(|| format!("cannot read key '{}'", path.display()))?;
     let mut extra = [0_u8; 1];
-    if reader.read(&mut extra)? != 0 {
+    if file.read(&mut extra)? != 0 {
         bail!("key '{}' changed while it was being read", path.display());
     }
     Ok(key)
@@ -202,13 +198,12 @@ fn prepare_encryption(
 }
 
 fn encrypt_prepared(
-    input: File,
+    mut input: File,
     output_path: &Path,
     algorithm: Algorithm,
     key: &[u8],
     header: &Header,
 ) -> Result<()> {
-    let mut reader = BufReader::with_capacity(IO_BUFFER_SIZE, input);
     let mut output = NewOutput::create(output_path)?;
     output
         .writer()
@@ -216,13 +211,13 @@ fn encrypt_prepared(
         .context("cannot write encrypted file header")?;
 
     if algorithm.is_aead() {
-        aead::encrypt(&mut reader, output.writer(), algorithm, key, header)?;
+        aead::encrypt(&mut input, output.writer(), algorithm, key, header)?;
     } else {
-        legacy::encrypt(&mut reader, output.writer(), algorithm, key, header)?;
+        legacy::encrypt(&mut input, output.writer(), algorithm, key, header)?;
     }
 
     ensure_eof(
-        &mut reader,
+        &mut input,
         "input file changed while it was being encrypted",
     )?;
     output.finish()
@@ -241,28 +236,26 @@ fn decrypt_file(
 }
 
 fn prepare_decryption(
-    input: File,
+    mut input: File,
     input_path: &Path,
     algorithm: Algorithm,
     expected_keying: ExpectedKeying,
-) -> Result<(BufReader<File>, Header)> {
+) -> Result<(File, Header)> {
     let encrypted_len = input
         .metadata()
         .with_context(|| format!("cannot inspect input '{}'", input_path.display()))?
         .len();
-    let mut reader = BufReader::with_capacity(IO_BUFFER_SIZE, input);
-
     let mut header_bytes = [0_u8; format::HEADER_LEN];
-    reader
+    input
         .read_exact(&mut header_bytes)
         .context("encrypted file is too short to contain a complete header")?;
     let header = Header::parse(header_bytes, algorithm, CHUNK_SIZE, expected_keying)?;
     verify_encrypted_length(algorithm, &header, encrypted_len)?;
-    Ok((reader, header))
+    Ok((input, header))
 }
 
 fn decrypt_prepared(
-    mut reader: BufReader<File>,
+    mut reader: File,
     output_path: &Path,
     algorithm: Algorithm,
     key: &[u8],

@@ -94,6 +94,40 @@ fn accepts_a_key_longer_than_the_input() {
 }
 
 #[test]
+#[allow(clippy::permissions_set_readonly_false)]
+fn preserves_readonly_permissions() {
+    let directory = tempfile::tempdir().expect("create OTP test directory");
+    let input_path = directory.path().join("input");
+    fs::write(&input_path, [1_u8, 2, 3]).expect("write OTP input");
+    fs::write(directory.path().join("key"), [4_u8, 5, 6]).expect("write OTP key");
+
+    let mut permissions = fs::metadata(&input_path)
+        .expect("inspect OTP input")
+        .permissions();
+    permissions.set_readonly(true);
+    fs::set_permissions(&input_path, permissions).expect("make OTP input read-only");
+
+    let output = run_in(BINARY, directory.path(), &["input", "key"]);
+    let readonly = fs::metadata(&input_path)
+        .expect("inspect transformed OTP input")
+        .permissions()
+        .readonly();
+
+    #[cfg(windows)]
+    {
+        let mut cleanup_permissions = fs::metadata(&input_path)
+            .expect("inspect transformed OTP input for cleanup")
+            .permissions();
+        cleanup_permissions.set_readonly(false);
+        fs::set_permissions(&input_path, cleanup_permissions)
+            .expect("make transformed OTP input removable");
+    }
+
+    assert_success(&output);
+    assert!(readonly, "OTP replacement lost the read-only permission");
+}
+
+#[test]
 fn accepts_separate_empty_input_and_key_files() {
     let directory = tempfile::tempdir().expect("create OTP test directory");
     fs::write(directory.path().join("input"), []).expect("write empty OTP input");

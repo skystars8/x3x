@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 use std::ffi::OsStr;
 use std::fs::File;
-use std::io::{BufWriter, Write};
+use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 
 pub(crate) const IO_BUFFER_SIZE: usize = 1024 * 1024;
@@ -33,9 +33,15 @@ pub(crate) fn validate_filename(name: &OsStr) -> Result<()> {
         base.as_str(),
         "CON" | "PRN" | "AUX" | "NUL" | "CLOCK$" | "CONIN$" | "CONOUT$"
     );
-    let is_reserved_numbered = base.len() == 4
-        && matches!(&base[..3], "COM" | "LPT")
-        && matches!(base.as_bytes()[3], b'1'..=b'9');
+    let is_reserved_numbered = base
+        .strip_prefix("COM")
+        .or_else(|| base.strip_prefix("LPT"))
+        .is_some_and(|suffix| {
+            matches!(
+                suffix,
+                "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+            )
+        });
     if is_reserved_word || is_reserved_numbered {
         bail!("filename is a reserved device name on Windows");
     }
@@ -94,7 +100,7 @@ pub(crate) fn ensure_absent(path: &Path) -> Result<()> {
 /// A private temporary output installed only when finish completes.
 pub(crate) struct NewOutput {
     path: PathBuf,
-    writer: Option<BufWriter<tempfile::NamedTempFile>>,
+    writer: Option<tempfile::NamedTempFile>,
 }
 
 impl NewOutput {
@@ -107,11 +113,11 @@ impl NewOutput {
             .with_context(|| format!("cannot create temporary output in '{}'", parent.display()))?;
         Ok(Self {
             path: path.to_owned(),
-            writer: Some(BufWriter::with_capacity(IO_BUFFER_SIZE, temporary)),
+            writer: Some(temporary),
         })
     }
 
-    pub(crate) fn writer(&mut self) -> &mut BufWriter<tempfile::NamedTempFile> {
+    pub(crate) fn writer(&mut self) -> &mut tempfile::NamedTempFile {
         self.writer.as_mut().expect("output writer is present")
     }
 
@@ -121,15 +127,10 @@ impl NewOutput {
             .flush()
             .with_context(|| format!("cannot flush output '{}'", self.path.display()))?;
         writer
-            .get_ref()
             .as_file()
             .sync_all()
             .with_context(|| format!("cannot sync output '{}'", self.path.display()))?;
-        let temporary = writer
-            .into_inner()
-            .map_err(std::io::IntoInnerError::into_error)
-            .context("cannot finalize buffered output")?;
-        temporary
+        writer
             .persist_noclobber(&self.path)
             .map_err(|error| error.error)
             .with_context(|| format!("refusing to overwrite output '{}'", self.path.display()))?;
@@ -170,6 +171,26 @@ mod tests {
                 validate_filename(OsStr::new(name)).is_err(),
                 "accepted nonportable filename {name:?}"
             );
+        }
+    }
+
+    #[test]
+    fn accepts_short_unicode_names_without_panicking() {
+        assert!(validate_filename(OsStr::new("abé")).is_ok());
+        assert!(validate_filename(OsStr::new("a€")).is_ok());
+        assert!(validate_filename(OsStr::new("éé")).is_ok());
+    }
+
+    #[test]
+    fn rejects_all_windows_numbered_device_spellings() {
+        for prefix in ["COM", "LPT"] {
+            for suffix in ["1", "2", "3", "4", "5", "6", "7", "8", "9", "¹", "²", "³"] {
+                let name = format!("{prefix}{suffix}.key");
+                assert!(
+                    validate_filename(OsStr::new(&name)).is_err(),
+                    "accepted Windows device name {name:?}"
+                );
+            }
         }
     }
 }
