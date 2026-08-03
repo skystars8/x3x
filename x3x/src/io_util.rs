@@ -6,17 +6,20 @@ use std::path::{Component, Path, PathBuf};
 
 pub(crate) const IO_BUFFER_SIZE: usize = 1024 * 1024;
 
-/// Accept only a single filename component. This deliberately rejects absolute
-/// paths, directory traversal, and even dot prefixes for identical behavior on
-/// all supported operating systems.
+/// Accept only a single portable filename component. This deliberately rejects
+/// absolute paths and directory traversal for identical behavior on all
+/// supported operating systems.
 pub(crate) fn validate_filename(name: &OsStr) -> Result<()> {
     let text = name
         .to_str()
         .context("filenames must be valid Unicode for cross-platform use")?;
-    if text
-        .chars()
-        .any(|character| matches!(character, '/' | '\\' | ':'))
-        || text.ends_with(['.', ' '])
+    if text.chars().any(|character| {
+        character.is_ascii_control()
+            || matches!(
+                character,
+                '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|'
+            )
+    }) || text.ends_with(['.', ' '])
     {
         bail!("filename contains characters that are not portable across operating systems");
     }
@@ -60,6 +63,22 @@ pub(crate) fn open_regular_file(path: &Path) -> Result<File> {
         bail!("'{}' is not a regular file", path.display());
     }
     Ok(file)
+}
+
+pub(crate) fn files_are_same(first: &File, second: &File) -> Result<bool> {
+    let first = same_file::Handle::from_file(
+        first
+            .try_clone()
+            .context("cannot duplicate the first file handle")?,
+    )
+    .context("cannot identify the first file")?;
+    let second = same_file::Handle::from_file(
+        second
+            .try_clone()
+            .context("cannot duplicate the second file handle")?,
+    )
+    .context("cannot identify the second file")?;
+    Ok(first == second)
 }
 
 pub(crate) fn ensure_absent(path: &Path) -> Result<()> {
@@ -114,6 +133,43 @@ impl NewOutput {
             .persist_noclobber(&self.path)
             .map_err(|error| error.error)
             .with_context(|| format!("refusing to overwrite output '{}'", self.path.display()))?;
+
+        #[cfg(unix)]
+        {
+            let parent = self
+                .path
+                .parent()
+                .context("output path does not have a parent directory")?;
+            File::open(parent)
+                .and_then(|directory| directory.sync_all())
+                .with_context(|| format!("cannot sync directory '{}'", parent.display()))?;
+        }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_characters_that_are_invalid_in_portable_filenames() {
+        for name in [
+            "has/slash",
+            "has\\backslash",
+            "has:colon",
+            "has*asterisk",
+            "has?question",
+            "has\"quote",
+            "has<less",
+            "has>greater",
+            "has|pipe",
+            "has\u{1f}control",
+        ] {
+            assert!(
+                validate_filename(OsStr::new(name)).is_err(),
+                "accepted nonportable filename {name:?}"
+            );
+        }
     }
 }

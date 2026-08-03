@@ -47,7 +47,8 @@ aes D filename output-file
 Replace aes with the desired binary name. The operation is exactly uppercase E
 or D. Input, output, and key must be in the current working directory, and input
 and output arguments must be portable Unicode filenames without path
-components, colons, trailing dots or spaces, or Windows reserved device names.
+components, ASCII control characters, Windows-invalid punctuation
+(`: * ? " < > |`), trailing dots or spaces, or Windows reserved device names.
 This keeps filename behavior consistent across Windows, Linux, and macOS.
 
 Outputs are never overwritten. Data is written to a private temporary file in

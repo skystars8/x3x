@@ -18,6 +18,7 @@ hkdf = "0.12.4"
 hmac = "0.12.1"
 rabbit = { version = "0.5.0", features = ["zeroize"] }
 rpassword = "7.4.0"
+same-file = "1.0.6"
 serpent = { version = "0.6.0", features = ["zeroize"] }
 sha2 = "0.10.9"
 sha3 = "0.10.8"

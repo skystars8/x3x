@@ -229,7 +229,19 @@ fn paths_and_active_key_input_are_refused() {
         )
         .is_err()
     );
-    for invalid_output in ["folder\\output", "file:stream", "NUL", "trailing."] {
+    for invalid_output in [
+        "folder\\output",
+        "file:stream",
+        "has*asterisk",
+        "has?question",
+        "has\"quote",
+        "has<less",
+        "has>greater",
+        "has|pipe",
+        "has\u{1f}control",
+        "NUL",
+        "trailing.",
+    ] {
         assert!(
             process_file_in(
                 directory.path(),
@@ -252,4 +264,54 @@ fn paths_and_active_key_input_are_refused() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn hard_link_alias_of_active_key_is_refused() {
+    let directory = tempfile::tempdir().unwrap();
+    let algorithm = Algorithm::Aes256GcmSiv;
+    write_algorithm_key(directory.path(), algorithm);
+    fs::hard_link(
+        directory.path().join(algorithm.key_filename()),
+        directory.path().join("key-alias"),
+    )
+    .unwrap();
+
+    let result = process_file_in(
+        directory.path(),
+        algorithm,
+        Mode::Encrypt,
+        OsStr::new("key-alias"),
+        OsStr::new("output"),
+    );
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("refusing to process the active key file as input")
+    );
+    assert!(!directory.path().join("output").exists());
+}
+
+#[cfg(windows)]
+#[test]
+fn case_alias_of_active_key_is_refused() {
+    let directory = tempfile::tempdir().unwrap();
+    let algorithm = Algorithm::Aes256GcmSiv;
+    write_algorithm_key(directory.path(), algorithm);
+
+    let result = process_file_in(
+        directory.path(),
+        algorithm,
+        Mode::Encrypt,
+        OsStr::new("AES.KEY"),
+        OsStr::new("output"),
+    );
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("refusing to process the active key file as input")
+    );
+    assert!(!directory.path().join("output").exists());
 }

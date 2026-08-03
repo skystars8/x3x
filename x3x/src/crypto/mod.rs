@@ -5,7 +5,9 @@ mod password;
 
 use self::format::{ExpectedKeying, Header, Keying};
 use self::password::{PasswordKdf, derive_key};
-use crate::io_util::{IO_BUFFER_SIZE, NewOutput, ensure_absent, local_path, open_regular_file};
+use crate::io_util::{
+    IO_BUFFER_SIZE, NewOutput, ensure_absent, files_are_same, local_path, open_regular_file,
+};
 use crate::{Algorithm, Mode};
 use anyhow::{Context, Result, bail};
 use std::ffi::OsStr;
@@ -41,10 +43,31 @@ pub fn process_file_in(
         bail!("refusing to use the active key filename as output");
     }
 
-    let key = read_key(&key_path, algorithm.key_len())?;
+    let key_file = open_regular_file(&key_path)
+        .with_context(|| format!("required key is '{}'", key_path.display()))?;
+    let input = open_regular_file(&input_path)?;
+    if files_are_same(&input, &key_file).with_context(|| {
+        format!(
+            "cannot compare input '{}' with key '{}'",
+            input_path.display(),
+            key_path.display()
+        )
+    })? {
+        bail!("refusing to process the active key file as input");
+    }
+
+    let key = read_key(key_file, &key_path, algorithm.key_len())?;
     match mode {
-        Mode::Encrypt => encrypt_file(&input_path, &output_path, algorithm, &key, Keying::KeyFile),
+        Mode::Encrypt => encrypt_file(
+            input,
+            &input_path,
+            &output_path,
+            algorithm,
+            &key,
+            Keying::KeyFile,
+        ),
         Mode::Decrypt => decrypt_file(
+            input,
             &input_path,
             &output_path,
             algorithm,
@@ -99,17 +122,22 @@ fn process_password_file_with_kdf_in(
     let input_path = local_path(directory, input_name)?;
     let output_path = local_path(directory, output_name)?;
     ensure_absent(&output_path)?;
+    let input = open_regular_file(&input_path)?;
 
     match mode {
         Mode::Encrypt => {
-            let (input, header) =
-                prepare_encryption(&input_path, algorithm, Keying::Password(encryption_kdf))?;
+            let (input, header) = prepare_encryption(
+                input,
+                &input_path,
+                algorithm,
+                Keying::Password(encryption_kdf),
+            )?;
             let key = derive_key(password, &header.nonce_seed, algorithm, encryption_kdf)?;
             encrypt_prepared(input, &output_path, algorithm, &key, &header)
         }
         Mode::Decrypt => {
             let (reader, header) =
-                prepare_decryption(&input_path, algorithm, ExpectedKeying::Password)?;
+                prepare_decryption(input, &input_path, algorithm, ExpectedKeying::Password)?;
             let Keying::Password(parameters) = header.keying else {
                 unreachable!("password header was required");
             };
@@ -119,9 +147,7 @@ fn process_password_file_with_kdf_in(
     }
 }
 
-fn read_key(path: &Path, expected_len: usize) -> Result<Zeroizing<Vec<u8>>> {
-    let file =
-        open_regular_file(path).with_context(|| format!("required key is '{}'", path.display()))?;
+fn read_key(file: File, path: &Path, expected_len: usize) -> Result<Zeroizing<Vec<u8>>> {
     let actual_len = file
         .metadata()
         .with_context(|| format!("cannot inspect key '{}'", path.display()))?
@@ -146,22 +172,23 @@ fn read_key(path: &Path, expected_len: usize) -> Result<Zeroizing<Vec<u8>>> {
 }
 
 fn encrypt_file(
+    input: File,
     input_path: &Path,
     output_path: &Path,
     algorithm: Algorithm,
     key: &[u8],
     keying: Keying,
 ) -> Result<()> {
-    let (input, header) = prepare_encryption(input_path, algorithm, keying)?;
+    let (input, header) = prepare_encryption(input, input_path, algorithm, keying)?;
     encrypt_prepared(input, output_path, algorithm, key, &header)
 }
 
 fn prepare_encryption(
+    input: File,
     input_path: &Path,
     algorithm: Algorithm,
     keying: Keying,
 ) -> Result<(File, Header)> {
-    let input = open_regular_file(input_path)?;
     let plaintext_len = input
         .metadata()
         .with_context(|| format!("cannot inspect input '{}'", input_path.display()))?
@@ -202,22 +229,23 @@ fn encrypt_prepared(
 }
 
 fn decrypt_file(
+    input: File,
     input_path: &Path,
     output_path: &Path,
     algorithm: Algorithm,
     key: &[u8],
     expected_keying: ExpectedKeying,
 ) -> Result<()> {
-    let (reader, header) = prepare_decryption(input_path, algorithm, expected_keying)?;
+    let (reader, header) = prepare_decryption(input, input_path, algorithm, expected_keying)?;
     decrypt_prepared(reader, output_path, algorithm, key, &header)
 }
 
 fn prepare_decryption(
+    input: File,
     input_path: &Path,
     algorithm: Algorithm,
     expected_keying: ExpectedKeying,
 ) -> Result<(BufReader<File>, Header)> {
-    let input = open_regular_file(input_path)?;
     let encrypted_len = input
         .metadata()
         .with_context(|| format!("cannot inspect input '{}'", input_path.display()))?
@@ -418,6 +446,31 @@ mod tests {
         );
         assert_ne!(&first[24..56], &second[24..56]);
         assert_ne!(first, second);
+
+        let mut excessive_parameters = first.clone();
+        excessive_parameters[56..60]
+            .copy_from_slice(&(PasswordKdf::PRODUCTION.memory_kib + 1).to_le_bytes());
+        fs::write(
+            directory.path().join("excessive-parameters.enc"),
+            excessive_parameters,
+        )
+        .unwrap();
+        let excessive_result = process_password_file_with_kdf_in(
+            directory.path(),
+            Algorithm::Aes256GcmSiv,
+            Mode::Decrypt,
+            OsStr::new("excessive-parameters.enc"),
+            OsStr::new("excessive-parameters.out"),
+            b"a long test password",
+            PasswordKdf::testing(),
+        );
+        assert!(
+            excessive_result
+                .unwrap_err()
+                .to_string()
+                .contains("password KDF memory cost")
+        );
+        assert!(!directory.path().join("excessive-parameters.out").exists());
 
         let mut damaged = first.clone();
         damaged[24] ^= 0x80;

@@ -85,6 +85,30 @@ fn otp_refuses_to_use_the_input_as_its_key() {
 }
 
 #[test]
+fn otp_refuses_a_hard_link_alias_of_the_input() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(directory.path().join("data"), b"contents").unwrap();
+    fs::hard_link(
+        directory.path().join("data"),
+        directory.path().join("key-alias"),
+    )
+    .unwrap();
+
+    assert!(
+        xor_file_in_place(
+            directory.path(),
+            OsStr::new("data"),
+            OsStr::new("key-alias"),
+        )
+        .is_err()
+    );
+    assert_eq!(
+        fs::read(directory.path().join("data")).unwrap(),
+        b"contents"
+    );
+}
+
+#[test]
 #[ignore = "uses production 256 MiB Argon2id parameters twice"]
 fn keymake_is_deterministic_and_not_a_repeated_short_block() {
     let first_directory = tempfile::tempdir().unwrap();

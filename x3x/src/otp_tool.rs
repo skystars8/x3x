@@ -1,4 +1,4 @@
-use crate::io_util::{IO_BUFFER_SIZE, local_path, open_regular_file};
+use crate::io_util::{IO_BUFFER_SIZE, files_are_same, local_path, open_regular_file};
 use anyhow::{Context, Result, bail};
 use std::ffi::OsStr;
 use std::io::{BufReader, BufWriter, Read, Write};
@@ -17,21 +17,25 @@ pub fn xor_file_in_place(directory: &Path, input_name: &OsStr, key_name: &OsStr)
     let input_path = local_path(directory, input_name)?;
     let key_path = local_path(directory, key_name)?;
 
-    let canonical_input = std::fs::canonicalize(&input_path)
+    let input = open_regular_file(&input_path)
         .with_context(|| format!("cannot resolve input '{}'", input_path.display()))?;
-    let canonical_key = std::fs::canonicalize(&key_path)
+    let key = open_regular_file(&key_path)
         .with_context(|| format!("cannot resolve key '{}'", key_path.display()))?;
-    if canonical_input == canonical_key {
+    if files_are_same(&input, &key).with_context(|| {
+        format!(
+            "cannot compare input '{}' with OTP key '{}'",
+            input_path.display(),
+            key_path.display()
+        )
+    })? {
         bail!("input file and OTP key file must be different files");
     }
 
-    let input = open_regular_file(&input_path)?;
     let input_metadata = input
         .metadata()
         .with_context(|| format!("cannot inspect input '{}'", input_path.display()))?;
     let input_len = input_metadata.len();
 
-    let key = open_regular_file(&key_path)?;
     let key_len = key
         .metadata()
         .with_context(|| format!("cannot inspect key '{}'", key_path.display()))?

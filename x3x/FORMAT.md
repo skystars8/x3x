@@ -31,8 +31,9 @@ file. Its final eight header bytes are:
 
 New version-2 files use 524,288 KiB (512 MiB), four iterations, and four lanes.
 The decoder bounds stored parameters before allocating memory: memory must be
-from 65,536 through 1,048,576 KiB, iterations from 3 through 16, and lanes from
-1 through 16, with at least 8 KiB per lane.
+from 65,536 through 524,288 KiB, iterations from 3 through 4, and lanes from 1
+through 4, with at least 8 KiB per lane. These limits ensure that an
+unauthenticated header cannot demand more work than a file created by x3x.
 
 Argon2id derives a 64-byte root from the exact UTF-8 password bytes and the
 32-byte random nonce-seed field as salt. HKDF-SHA-512, salted with that same

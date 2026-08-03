@@ -7,6 +7,9 @@ use zeroize::Zeroizing;
 
 pub(super) const KDF_ID_ARGON2ID: u8 = 1;
 const ROOT_KEY_LEN: usize = 64;
+const MAX_MEMORY_KIB: u32 = 512 * 1024;
+const MAX_ITERATIONS: u16 = 4;
+const MAX_LANES: u8 = 4;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct PasswordKdf {
@@ -17,9 +20,9 @@ pub(super) struct PasswordKdf {
 
 impl PasswordKdf {
     pub(super) const PRODUCTION: Self = Self {
-        memory_kib: 512 * 1024,
-        iterations: 4,
-        lanes: 4,
+        memory_kib: MAX_MEMORY_KIB,
+        iterations: MAX_ITERATIONS,
+        lanes: MAX_LANES,
     };
 
     pub(super) fn from_header(memory_kib: u32, iterations: u16, lanes: u8) -> Result<Self> {
@@ -42,10 +45,6 @@ impl PasswordKdf {
         const MIN_ITERATIONS: u16 = 3;
         #[cfg(test)]
         const MIN_ITERATIONS: u16 = 1;
-
-        const MAX_MEMORY_KIB: u32 = 1024 * 1024;
-        const MAX_ITERATIONS: u16 = 16;
-        const MAX_LANES: u8 = 16;
 
         if !(MIN_MEMORY_KIB..=MAX_MEMORY_KIB).contains(&self.memory_kib) {
             bail!(
@@ -146,6 +145,34 @@ mod tests {
         assert_eq!(PasswordKdf::PRODUCTION.memory_kib, 512 * 1024);
         assert_eq!(PasswordKdf::PRODUCTION.iterations, 4);
         assert_eq!(PasswordKdf::PRODUCTION.lanes, 4);
+    }
+
+    #[test]
+    fn header_parameters_cannot_exceed_the_production_budget() {
+        assert!(
+            PasswordKdf::from_header(
+                MAX_MEMORY_KIB + 1,
+                PasswordKdf::PRODUCTION.iterations,
+                PasswordKdf::PRODUCTION.lanes,
+            )
+            .is_err()
+        );
+        assert!(
+            PasswordKdf::from_header(
+                PasswordKdf::PRODUCTION.memory_kib,
+                MAX_ITERATIONS + 1,
+                PasswordKdf::PRODUCTION.lanes,
+            )
+            .is_err()
+        );
+        assert!(
+            PasswordKdf::from_header(
+                PasswordKdf::PRODUCTION.memory_kib,
+                PasswordKdf::PRODUCTION.iterations,
+                MAX_LANES + 1,
+            )
+            .is_err()
+        );
     }
 
     #[test]
