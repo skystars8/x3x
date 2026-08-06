@@ -95,3 +95,34 @@ fn successful_run_leaves_only_the_requested_key_file() {
         .collect();
     assert_eq!(entries, ["keygen.key"]);
 }
+#[test]
+fn invalid_sizes_leave_no_output_or_temporary_file() {
+    let directory = tempfile::tempdir().expect("create invalid-size keygen test directory");
+    for size in ["0", "not-a-size", "20000000001"] {
+        let output = run_in(BINARY, directory.path(), &[size]);
+        assert!(!output.status.success());
+        assert!(!directory.path().join("keygen.key").exists());
+        assert_eq!(
+            fs::read_dir(directory.path())
+                .expect("list invalid-size keygen directory")
+                .count(),
+            0
+        );
+    }
+}
+
+#[test]
+fn refuses_to_replace_a_directory_at_the_output_name() {
+    let directory = tempfile::tempdir().expect("create directory-output keygen test directory");
+    fs::create_dir(directory.path().join("keygen.key")).expect("create output-name directory");
+
+    let output = run_in(BINARY, directory.path(), &["32"]);
+    assert_failure_contains(&output, "refusing to overwrite existing file");
+    assert!(directory.path().join("keygen.key").is_dir());
+    assert_eq!(
+        fs::read_dir(directory.path())
+            .expect("list directory-output keygen directory")
+            .count(),
+        1
+    );
+}

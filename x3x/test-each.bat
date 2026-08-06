@@ -27,7 +27,7 @@ for %%S in (
 ) do (
     echo.
     echo ===== Testing %%S =====
-    cargo test --test %%S -- --test-threads=1
+    cargo test --locked --test %%S -- --test-threads=1
     if errorlevel 1 (
         echo.
         echo FAILED: %%S

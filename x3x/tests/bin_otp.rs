@@ -37,6 +37,17 @@ fn xors_every_input_byte_with_the_key() {
         fs::read(directory.path().join("input")).expect("read transformed input"),
         expected
     );
+    assert_eq!(
+        fs::read(directory.path().join("key")).expect("read unchanged OTP key"),
+        key
+    );
+    assert_eq!(
+        fs::read_dir(directory.path())
+            .expect("list OTP test directory")
+            .count(),
+        2,
+        "successful OTP processing left a temporary artifact"
+    );
 }
 
 #[test]
@@ -158,6 +169,27 @@ fn rejects_using_the_input_as_its_own_key() {
     let directory = tempfile::tempdir().expect("create OTP test directory");
     fs::write(directory.path().join("input"), b"preserve this").expect("write OTP input");
     let output = run_in(BINARY, directory.path(), &["input", "input"]);
+    assert_failure_contains(
+        &output,
+        "input file and OTP key file must be different files",
+    );
+    assert_eq!(
+        fs::read(directory.path().join("input")).expect("read preserved input"),
+        b"preserve this"
+    );
+}
+
+#[test]
+fn rejects_a_hard_link_alias_of_the_input_as_key() {
+    let directory = tempfile::tempdir().expect("create OTP hard-link test directory");
+    fs::write(directory.path().join("input"), b"preserve this").expect("write OTP input");
+    fs::hard_link(
+        directory.path().join("input"),
+        directory.path().join("key-alias"),
+    )
+    .expect("create hard-link alias");
+
+    let output = run_in(BINARY, directory.path(), &["input", "key-alias"]);
     assert_failure_contains(
         &output,
         "input file and OTP key file must be different files",

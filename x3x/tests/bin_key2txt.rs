@@ -24,6 +24,17 @@ fn converts_a_binary_key_to_documented_decimal_text() {
         fs::read(directory.path().join("key2txt.txt")).expect("read decimal text"),
         b"23,\n255,\n53,\n9,\n5\n"
     );
+    assert_eq!(
+        fs::read(directory.path().join("source.key")).expect("read unchanged source key"),
+        [23_u8, 255, 53, 9, 5]
+    );
+    assert_eq!(
+        fs::read_dir(directory.path())
+            .expect("list key2txt test directory")
+            .count(),
+        2,
+        "successful conversion left a temporary artifact"
+    );
 }
 
 #[test]

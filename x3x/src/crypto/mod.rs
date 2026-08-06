@@ -324,62 +324,98 @@ mod tests {
         Algorithm::Aegis128L,
     ];
 
-    #[test]
-    fn every_password_algorithm_round_trips_and_rejects_a_wrong_password() {
-        let root = tempfile::tempdir().unwrap();
+    fn password_algorithm_round_trips_and_rejects_a_wrong_password(algorithm: Algorithm) {
+        let directory = tempfile::tempdir().expect("create password cipher test directory");
         let plaintext: Vec<u8> = (0_usize..8193)
             .map(|index| u8::try_from(index % 251).expect("test byte fits in u8"))
             .collect();
+        fs::write(directory.path().join("plain.bin"), &plaintext).expect("write plaintext");
 
-        for algorithm in ALGORITHMS {
-            let directory = root.path().join(algorithm.password_command());
-            fs::create_dir(&directory).unwrap();
-            fs::write(directory.join("plain.bin"), &plaintext).unwrap();
+        process_password_file_with_kdf_in(
+            directory.path(),
+            algorithm,
+            Mode::Encrypt,
+            OsStr::new("plain.bin"),
+            OsStr::new("encrypted.bin"),
+            b"a long and unique test passphrase",
+            PasswordKdf::testing(),
+        )
+        .unwrap_or_else(|error| panic!("{algorithm} password encryption failed: {error:#}"));
 
-            process_password_file_with_kdf_in(
-                &directory,
-                algorithm,
-                Mode::Encrypt,
-                OsStr::new("plain.bin"),
-                OsStr::new("encrypted.bin"),
-                b"a long and unique test passphrase",
-                PasswordKdf::testing(),
-            )
-            .unwrap_or_else(|error| panic!("{algorithm} password encryption failed: {error:#}"));
+        let wrong_password = process_password_file_with_kdf_in(
+            directory.path(),
+            algorithm,
+            Mode::Decrypt,
+            OsStr::new("encrypted.bin"),
+            OsStr::new("wrong-password.out"),
+            b"not the correct passphrase",
+            PasswordKdf::testing(),
+        );
+        assert!(
+            wrong_password.is_err(),
+            "{algorithm} accepted a wrong password"
+        );
+        assert!(!directory.path().join("wrong-password.out").exists());
 
-            let wrong_password = process_password_file_with_kdf_in(
-                &directory,
-                algorithm,
-                Mode::Decrypt,
-                OsStr::new("encrypted.bin"),
-                OsStr::new("wrong-password.out"),
-                b"not the correct passphrase",
-                PasswordKdf::testing(),
-            );
-            assert!(
-                wrong_password.is_err(),
-                "{algorithm} accepted a wrong password"
-            );
-            assert!(!directory.join("wrong-password.out").exists());
+        process_password_file_with_kdf_in(
+            directory.path(),
+            algorithm,
+            Mode::Decrypt,
+            OsStr::new("encrypted.bin"),
+            OsStr::new("decrypted.bin"),
+            b"a long and unique test passphrase",
+            PasswordKdf::testing(),
+        )
+        .unwrap_or_else(|error| panic!("{algorithm} password decryption failed: {error:#}"));
 
-            process_password_file_with_kdf_in(
-                &directory,
-                algorithm,
-                Mode::Decrypt,
-                OsStr::new("encrypted.bin"),
-                OsStr::new("decrypted.bin"),
-                b"a long and unique test passphrase",
-                PasswordKdf::testing(),
-            )
-            .unwrap_or_else(|error| panic!("{algorithm} password decryption failed: {error:#}"));
-
-            assert_eq!(
-                fs::read(directory.join("decrypted.bin")).unwrap(),
-                plaintext,
-                "{algorithm} password round trip differed"
-            );
-        }
+        assert_eq!(
+            fs::read(directory.path().join("decrypted.bin")).expect("read decrypted file"),
+            plaintext,
+            "{algorithm} password round trip differed"
+        );
     }
+
+    macro_rules! password_algorithm_test {
+        ($name:ident, $algorithm:expr) => {
+            #[test]
+            fn $name() {
+                password_algorithm_round_trips_and_rejects_a_wrong_password($algorithm);
+            }
+        };
+    }
+
+    password_algorithm_test!(
+        aesp_round_trips_and_rejects_wrong_password,
+        Algorithm::Aes256GcmSiv
+    );
+    password_algorithm_test!(
+        chap_round_trips_and_rejects_wrong_password,
+        Algorithm::XChaCha20Poly1305
+    );
+    password_algorithm_test!(
+        serp_round_trips_and_rejects_wrong_password,
+        Algorithm::Serpent256
+    );
+    password_algorithm_test!(
+        thfp_round_trips_and_rejects_wrong_password,
+        Algorithm::Threefish1024
+    );
+    password_algorithm_test!(
+        ascp_round_trips_and_rejects_wrong_password,
+        Algorithm::AsconAead128
+    );
+    password_algorithm_test!(
+        rabbitp_round_trips_and_rejects_wrong_password,
+        Algorithm::Rabbit
+    );
+    password_algorithm_test!(
+        aegis256p_round_trips_and_rejects_wrong_password,
+        Algorithm::Aegis256
+    );
+    password_algorithm_test!(
+        aegis128lp_round_trips_and_rejects_wrong_password,
+        Algorithm::Aegis128L
+    );
 
     #[test]
     #[ignore = "uses production 512 MiB Argon2id parameters twice"]
@@ -564,5 +600,54 @@ mod tests {
         );
         assert!(!directory.path().join("password.out").exists());
         assert!(!directory.path().join("key-file.out").exists());
+    }
+    #[test]
+    fn key_file_container_compatibility_vectors_are_stable() {
+        use sha2::Digest as _;
+        use std::io::Cursor;
+
+        let plaintext: Vec<u8> = (0..CHUNK_SIZE + 17)
+            .map(|index| u8::try_from(index % 251).expect("test byte fits in u8"))
+            .collect();
+        let mut nonce_seed = [0_u8; 32];
+        for (index, byte) in nonce_seed.iter_mut().enumerate() {
+            *byte = u8::try_from(index * 7 + 3).expect("nonce byte fits in u8");
+        }
+
+        let expected_digests = [
+            "5b730c79eb35dcdb1dfd38291b13070b536f71510576d638da4d2bc2254b0e48",
+            "0bc93d33dd9881776c95783840c968cbd1d96c5378e3ed065fff6c6040ab55f9",
+            "eae5bee7d5ee0cae37aab43874c4a8aac243713d970bc5f18b574c54c74e16cb",
+            "f925f247a4c21f2210c5d00a40d45a5ad1bd2c073345c9b67e28276d3d127f88",
+            "a3aa96be711a4dc84bb68849df5e946c332bc5c679ef84a4bfd8d7ef7f557197",
+            "b262635f753e0aa69b82f239b4e5cc7d9c60592260ab66b489c405c9726a8a73",
+            "be1aaf55cc1d11405eee3ba856f20c828efa46d23a4e571506cbc7d6e6fcfe0a",
+            "5b7e9245fba029c16b5a31512e4de5d6a72609a8f58da5e1a021c4fa495e7fba",
+        ];
+        for (algorithm, expected_digest) in ALGORITHMS.into_iter().zip(expected_digests) {
+            let key = vec![algorithm.id().wrapping_mul(29).wrapping_add(7); algorithm.key_len()];
+            let header = Header::new(
+                algorithm,
+                plaintext.len() as u64,
+                nonce_seed,
+                CHUNK_SIZE,
+                Keying::KeyFile,
+            );
+            let mut container = header.bytes().to_vec();
+            let mut input = Cursor::new(&plaintext);
+            if algorithm.is_aead() {
+                aead::encrypt(&mut input, &mut container, algorithm, &key, &header)
+                    .expect("encrypt fixed AEAD compatibility vector");
+            } else {
+                legacy::encrypt(&mut input, &mut container, algorithm, &key, &header)
+                    .expect("encrypt fixed legacy compatibility vector");
+            }
+            let digest = sha2::Sha256::digest(&container);
+            assert_eq!(
+                format!("{digest:x}"),
+                expected_digest,
+                "{algorithm} container compatibility vector changed"
+            );
+        }
     }
 }

@@ -150,3 +150,54 @@ impl Mode {
         }
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    const ALGORITHMS: [Algorithm; 8] = [
+        Algorithm::Aes256GcmSiv,
+        Algorithm::XChaCha20Poly1305,
+        Algorithm::Serpent256,
+        Algorithm::Threefish1024,
+        Algorithm::AsconAead128,
+        Algorithm::Rabbit,
+        Algorithm::Aegis256,
+        Algorithm::Aegis128L,
+    ];
+
+    #[test]
+    fn identifiers_round_trip_and_reject_unknown_values() {
+        for (expected_id, algorithm) in (1_u8..=8).zip(ALGORITHMS) {
+            assert_eq!(algorithm.id(), expected_id);
+            assert_eq!(Algorithm::from_id(expected_id).unwrap(), algorithm);
+        }
+        for unknown in [0, 9, u8::MAX] {
+            assert!(Algorithm::from_id(unknown).is_err());
+        }
+    }
+
+    #[test]
+    fn every_app_name_and_key_filename_is_unique() {
+        let mut commands = HashSet::new();
+        let mut password_commands = HashSet::new();
+        let mut key_filenames = HashSet::new();
+        for algorithm in ALGORITHMS {
+            assert!(commands.insert(algorithm.command()));
+            assert!(password_commands.insert(algorithm.password_command()));
+            assert!(key_filenames.insert(algorithm.key_filename()));
+            assert!(matches!(algorithm.key_len(), 16 | 32 | 128));
+            assert!(matches!(algorithm.tag_len(), 16 | 64));
+            assert!(algorithm.nonce_len() >= 12);
+        }
+    }
+
+    #[test]
+    fn modes_accept_only_the_documented_uppercase_operations() {
+        assert_eq!(Mode::parse("E").unwrap(), Mode::Encrypt);
+        assert_eq!(Mode::parse("D").unwrap(), Mode::Decrypt);
+        for invalid in ["", "e", "d", "ED", "encrypt", "DECRYPT"] {
+            assert!(Mode::parse(invalid).is_err());
+        }
+    }
+}

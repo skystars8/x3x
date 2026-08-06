@@ -193,4 +193,75 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn dropping_unfinished_output_removes_the_temporary_file() {
+        let directory = tempfile::tempdir().expect("create output test directory");
+        let output_path = directory.path().join("output");
+        {
+            let mut output = NewOutput::create(&output_path).expect("create private output");
+            output
+                .writer()
+                .write_all(b"incomplete")
+                .expect("write private output");
+        }
+
+        assert!(!output_path.exists());
+        assert_eq!(
+            std::fs::read_dir(directory.path())
+                .expect("list output test directory")
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn finish_refuses_a_destination_created_after_preflight() {
+        let directory = tempfile::tempdir().expect("create output race test directory");
+        let output_path = directory.path().join("output");
+        let mut output = NewOutput::create(&output_path).expect("create private output");
+        output
+            .writer()
+            .write_all(b"candidate")
+            .expect("write private output");
+        std::fs::write(&output_path, b"preserve me").expect("create competing output");
+
+        let error = output
+            .finish()
+            .expect_err("late destination must not be replaced");
+        assert!(error.to_string().contains("refusing to overwrite output"));
+        assert_eq!(
+            std::fs::read(&output_path).expect("read competing output"),
+            b"preserve me"
+        );
+        assert_eq!(
+            std::fs::read_dir(directory.path())
+                .expect("list output race test directory")
+                .count(),
+            1,
+            "failed no-clobber install left a temporary artifact"
+        );
+    }
+
+    #[test]
+    fn successful_finish_installs_only_the_requested_file() {
+        let directory = tempfile::tempdir().expect("create successful output test directory");
+        let output_path = directory.path().join("output");
+        let mut output = NewOutput::create(&output_path).expect("create private output");
+        output
+            .writer()
+            .write_all(b"complete")
+            .expect("write private output");
+        output.finish().expect("install complete output");
+
+        assert_eq!(
+            std::fs::read(&output_path).expect("read output"),
+            b"complete"
+        );
+        assert_eq!(
+            std::fs::read_dir(directory.path())
+                .expect("list successful output test directory")
+                .count(),
+            1
+        );
+    }
 }

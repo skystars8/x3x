@@ -271,6 +271,169 @@ pub fn rejects_a_wrong_key_without_output(app: KeyCipherApp) {
     assert!(!directory.path().join("output").exists());
 }
 
+pub fn round_trips_exact_chunk_boundaries_without_modifying_inputs(app: KeyCipherApp) {
+    for length in [x3x::CHUNK_SIZE - 1, x3x::CHUNK_SIZE, x3x::CHUNK_SIZE + 1] {
+        let directory = tempfile::tempdir().expect("create boundary test directory");
+        write_key(directory.path(), app);
+        let plaintext: Vec<u8> = (0..length)
+            .map(|index| u8::try_from(index % 251).expect("test byte fits in u8"))
+            .collect();
+        fs::write(directory.path().join("plain"), &plaintext).expect("write boundary plaintext");
+
+        assert_success(&run_in(
+            app.binary,
+            directory.path(),
+            &["E", "plain", "cipher"],
+        ));
+        assert_eq!(
+            fs::read(directory.path().join("plain")).expect("read unchanged plaintext"),
+            plaintext
+        );
+        let ciphertext = fs::read(directory.path().join("cipher")).expect("read ciphertext");
+
+        assert_success(&run_in(
+            app.binary,
+            directory.path(),
+            &["D", "cipher", "output"],
+        ));
+        assert_eq!(
+            fs::read(directory.path().join("output")).expect("read boundary output"),
+            plaintext
+        );
+        assert_eq!(
+            fs::read(directory.path().join("cipher")).expect("read unchanged ciphertext"),
+            ciphertext
+        );
+    }
+}
+
+pub fn rejects_truncated_and_trailing_data_without_artifacts(app: KeyCipherApp) {
+    let directory = tempfile::tempdir().expect("create malformed-length test directory");
+    write_key(directory.path(), app);
+    fs::write(directory.path().join("plain"), b"authenticated contents").expect("write plaintext");
+    assert_success(&run_in(
+        app.binary,
+        directory.path(),
+        &["E", "plain", "cipher"],
+    ));
+    let ciphertext = fs::read(directory.path().join("cipher")).expect("read ciphertext");
+
+    let mut truncated = ciphertext.clone();
+    truncated.pop().expect("ciphertext is not empty");
+    let mut trailing = ciphertext;
+    trailing.push(0xA5);
+
+    for (input_name, output_name, contents) in [
+        ("truncated", "truncated.out", truncated),
+        ("trailing", "trailing.out", trailing),
+    ] {
+        fs::write(directory.path().join(input_name), &contents)
+            .expect("write malformed ciphertext");
+        let output = run_in(
+            app.binary,
+            directory.path(),
+            &["D", input_name, output_name],
+        );
+        assert_failure_contains(&output, "encrypted file has invalid length");
+        assert!(!directory.path().join(output_name).exists());
+        assert_eq!(
+            fs::read(directory.path().join(input_name)).expect("read unchanged malformed input"),
+            contents
+        );
+    }
+
+    assert_eq!(
+        fs::read_dir(directory.path())
+            .expect("list malformed-length test directory")
+            .count(),
+        5,
+        "failed decryptions left a temporary artifact"
+    );
+}
+
+pub fn rejects_malformed_headers_without_output(app: KeyCipherApp) {
+    let directory = tempfile::tempdir().expect("create malformed-header test directory");
+    write_key(directory.path(), app);
+    fs::write(directory.path().join("plain"), b"header validation").expect("write plaintext");
+    assert_success(&run_in(
+        app.binary,
+        directory.path(),
+        &["E", "plain", "cipher"],
+    ));
+    let ciphertext = fs::read(directory.path().join("cipher")).expect("read ciphertext");
+
+    let mut variants = Vec::new();
+    for offset in [0_usize, 8, 9, 10, 11, 12, 16, 56] {
+        let mut malformed = ciphertext.clone();
+        malformed[offset] ^= if offset == 8 || offset == 9 {
+            0x7F
+        } else {
+            0x01
+        };
+        variants.push(malformed);
+    }
+
+    for (index, contents) in variants.into_iter().enumerate() {
+        let input_name = format!("bad-header-{index}");
+        let output_name = format!("bad-header-{index}.out");
+        fs::write(directory.path().join(&input_name), contents).expect("write malformed header");
+        let output = run_in(
+            app.binary,
+            directory.path(),
+            &["D", &input_name, &output_name],
+        );
+        assert_failure_contains(&output, "error:");
+        assert!(!directory.path().join(output_name).exists());
+    }
+}
+
+pub fn authenticates_nonce_header_bytes(app: KeyCipherApp) {
+    let directory = tempfile::tempdir().expect("create authenticated-header test directory");
+    write_key(directory.path(), app);
+    fs::write(directory.path().join("plain"), b"authenticated header").expect("write plaintext");
+    assert_success(&run_in(
+        app.binary,
+        directory.path(),
+        &["E", "plain", "cipher"],
+    ));
+
+    let damaged_path = directory.path().join("damaged-header");
+    let mut damaged = fs::read(directory.path().join("cipher")).expect("read ciphertext");
+    damaged[24] ^= 0x80;
+    fs::write(&damaged_path, damaged).expect("write damaged header");
+
+    let output = run_in(
+        app.binary,
+        directory.path(),
+        &["D", "damaged-header", "output"],
+    );
+    assert_failure_contains(&output, "authentication failed");
+    assert!(!directory.path().join("output").exists());
+}
+
+pub fn preserves_an_existing_decryption_output(app: KeyCipherApp) {
+    let directory = tempfile::tempdir().expect("create decryption no-clobber test directory");
+    write_key(directory.path(), app);
+    fs::write(directory.path().join("plain"), b"secret").expect("write plaintext");
+    assert_success(&run_in(
+        app.binary,
+        directory.path(),
+        &["E", "plain", "cipher"],
+    ));
+    let ciphertext = fs::read(directory.path().join("cipher")).expect("read ciphertext");
+    fs::write(directory.path().join("output"), b"preserve me").expect("write existing output");
+
+    let result = run_in(app.binary, directory.path(), &["D", "cipher", "output"]);
+    assert_failure_contains(&result, "refusing to overwrite");
+    assert_eq!(
+        fs::read(directory.path().join("output")).expect("read preserved output"),
+        b"preserve me"
+    );
+    assert_eq!(
+        fs::read(directory.path().join("cipher")).expect("read unchanged ciphertext"),
+        ciphertext
+    );
+}
 macro_rules! define_key_cipher_tests {
     ($binary:expr, $command:literal, $key_filename:literal, $key_len:expr) => {
         const APP: $crate::common::KeyCipherApp = $crate::common::KeyCipherApp {
@@ -343,6 +506,30 @@ macro_rules! define_key_cipher_tests {
         #[test]
         fn rejects_a_wrong_key_without_output() {
             $crate::common::rejects_a_wrong_key_without_output(APP);
+        }
+        #[test]
+        fn round_trips_exact_chunk_boundaries_without_modifying_inputs() {
+            $crate::common::round_trips_exact_chunk_boundaries_without_modifying_inputs(APP);
+        }
+
+        #[test]
+        fn rejects_truncated_and_trailing_data_without_artifacts() {
+            $crate::common::rejects_truncated_and_trailing_data_without_artifacts(APP);
+        }
+
+        #[test]
+        fn rejects_malformed_headers_without_output() {
+            $crate::common::rejects_malformed_headers_without_output(APP);
+        }
+
+        #[test]
+        fn authenticates_nonce_header_bytes() {
+            $crate::common::authenticates_nonce_header_bytes(APP);
+        }
+
+        #[test]
+        fn preserves_an_existing_decryption_output() {
+            $crate::common::preserves_an_existing_decryption_output(APP);
         }
     };
 }

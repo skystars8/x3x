@@ -9,9 +9,21 @@ use std::path::Path;
 use zeroize::{Zeroize, Zeroizing};
 
 pub const MAX_KEY_SIZE: u64 = 20_000_000_000;
-const ARGON2_MEMORY_KIB: u32 = 256 * 1024;
-const ARGON2_ITERATIONS: u32 = 4;
-const ARGON2_LANES: u32 = 4;
+
+#[derive(Clone, Copy)]
+struct KeymakeKdf {
+    memory_kib: u32,
+    iterations: u32,
+    lanes: u32,
+}
+
+impl KeymakeKdf {
+    const PRODUCTION: Self = Self {
+        memory_kib: 256 * 1024,
+        iterations: 4,
+        lanes: 4,
+    };
+}
 
 fn validate_size(size: u64) -> Result<()> {
     if !(1..=MAX_KEY_SIZE).contains(&size) {
@@ -55,6 +67,15 @@ pub fn generate_random_key_in(directory: &Path, size: u64) -> Result<()> {
 /// Returns an error for an invalid size or password, existing output, key
 /// derivation failure, or an I/O failure.
 pub fn make_deterministic_key_in(directory: &Path, size: u64, password: &[u8]) -> Result<()> {
+    make_deterministic_key_with_kdf_in(directory, size, password, KeymakeKdf::PRODUCTION)
+}
+
+fn make_deterministic_key_with_kdf_in(
+    directory: &Path,
+    size: u64,
+    password: &[u8],
+    kdf: KeymakeKdf,
+) -> Result<()> {
     validate_size(size)?;
     if password.is_empty() {
         bail!("password must not be empty");
@@ -64,7 +85,7 @@ pub fn make_deterministic_key_in(directory: &Path, size: u64, password: &[u8]) -
     ensure_absent(&output_path)?;
 
     let salt = deterministic_salt(size);
-    let params = Params::new(ARGON2_MEMORY_KIB, ARGON2_ITERATIONS, ARGON2_LANES, Some(64))
+    let params = Params::new(kdf.memory_kib, kdf.iterations, kdf.lanes, Some(64))
         .map_err(|error| anyhow!("invalid Argon2id parameters: {error}"))?;
     let argon2 = Argon2::new(ArgonAlgorithm::Argon2id, Version::V0x13, params);
     let mut root_key = Zeroizing::new([0_u8; 64]);
@@ -118,5 +139,76 @@ mod tests {
         assert!(validate_size(MAX_KEY_SIZE).is_ok());
         assert!(validate_size(0).is_err());
         assert!(validate_size(MAX_KEY_SIZE + 1).is_err());
+    }
+    const TESTING_KDF: KeymakeKdf = KeymakeKdf {
+        memory_kib: 32,
+        iterations: 1,
+        lanes: 1,
+    };
+
+    fn make_test_key(directory: &Path, size: u64, password: &[u8]) -> Result<()> {
+        make_deterministic_key_with_kdf_in(directory, size, password, TESTING_KDF)
+    }
+
+    #[test]
+    fn keymake_is_deterministic_and_domain_separated() {
+        let first = tempfile::tempdir().expect("create first keymake test directory");
+        let second = tempfile::tempdir().expect("create second keymake test directory");
+        let other_password = tempfile::tempdir().expect("create password test directory");
+        let other_size = tempfile::tempdir().expect("create size test directory");
+
+        make_test_key(first.path(), 64, b"long test passphrase").expect("make first key");
+        make_test_key(second.path(), 64, b"long test passphrase").expect("make second key");
+        make_test_key(other_password.path(), 64, b"different test passphrase")
+            .expect("make different-password key");
+        make_test_key(other_size.path(), 65, b"long test passphrase")
+            .expect("make different-size key");
+
+        let first_key = std::fs::read(first.path().join("keymake.key")).expect("read first key");
+        let second_key = std::fs::read(second.path().join("keymake.key")).expect("read second key");
+        let password_key = std::fs::read(other_password.path().join("keymake.key"))
+            .expect("read different-password key");
+        let size_key =
+            std::fs::read(other_size.path().join("keymake.key")).expect("read different-size key");
+        assert_eq!(first_key, second_key);
+        assert_ne!(first_key, password_key);
+        assert_ne!(first_key, size_key[..64]);
+    }
+
+    #[test]
+    fn keymake_streams_exactly_across_its_buffer_boundary() {
+        let directory = tempfile::tempdir().expect("create streaming keymake test directory");
+        let size = IO_BUFFER_SIZE as u64 + 17;
+        make_test_key(directory.path(), size, b"long streaming test passphrase")
+            .expect("make streamed key");
+
+        assert_eq!(
+            std::fs::metadata(directory.path().join("keymake.key"))
+                .expect("inspect streamed key")
+                .len(),
+            size
+        );
+        assert_eq!(
+            std::fs::read_dir(directory.path())
+                .expect("list streaming keymake directory")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn keymake_rejects_empty_passwords_and_never_clobbers() {
+        let empty_password = tempfile::tempdir().expect("create empty-password test directory");
+        assert!(make_test_key(empty_password.path(), 32, b"").is_err());
+        assert!(!empty_password.path().join("keymake.key").exists());
+
+        let existing = tempfile::tempdir().expect("create no-clobber test directory");
+        std::fs::write(existing.path().join("keymake.key"), b"preserve me")
+            .expect("write existing key");
+        assert!(make_test_key(existing.path(), 32, b"long test passphrase").is_err());
+        assert_eq!(
+            std::fs::read(existing.path().join("keymake.key")).expect("read existing key"),
+            b"preserve me"
+        );
     }
 }

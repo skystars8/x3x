@@ -1,4 +1,4 @@
-use crate::io_util::ensure_absent;
+use crate::io_util::{ensure_absent, local_path, open_regular_file};
 use crate::{
     Algorithm, MAX_KEY_SIZE, Mode, binary_key_to_text_in, generate_random_key_in,
     make_deterministic_key_in, process_file_in, process_password_file_in, text_to_binary_key_in,
@@ -55,6 +55,8 @@ fn password_cipher_command(algorithm: Algorithm) -> Result<()> {
         .to_str()
         .context("operation must be valid Unicode and exactly E or D")?;
     let mode = Mode::parse(operation)?;
+    let directory = std::env::current_dir().context("cannot determine current directory")?;
+    preflight_password_file_operation(&directory, &arguments[2], &arguments[3])?;
 
     let password =
         Zeroizing::new(rpassword::prompt_password("Password: ").context("cannot read password")?);
@@ -68,7 +70,6 @@ fn password_cipher_command(algorithm: Algorithm) -> Result<()> {
         }
     }
 
-    let directory = std::env::current_dir().context("cannot determine current directory")?;
     process_password_file_in(
         &directory,
         algorithm,
@@ -87,6 +88,18 @@ fn password_cipher_command(algorithm: Algorithm) -> Result<()> {
         arguments[2].to_string_lossy(),
         arguments[3].to_string_lossy()
     );
+    Ok(())
+}
+
+fn preflight_password_file_operation(
+    directory: &std::path::Path,
+    input_name: &std::ffi::OsStr,
+    output_name: &std::ffi::OsStr,
+) -> Result<()> {
+    let input_path = local_path(directory, input_name)?;
+    let output_path = local_path(directory, output_name)?;
+    ensure_absent(&output_path)?;
+    drop(open_regular_file(&input_path)?);
     Ok(())
 }
 

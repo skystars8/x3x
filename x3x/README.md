@@ -12,7 +12,7 @@ security audit. Keep backups until it has been reviewed for your use case.
 From this directory:
 
 ~~~text
-cargo build --release --bins
+cargo build --locked --release --bins
 ~~~
 
 The executables are placed in target/release. Each one can be copied and used
@@ -36,6 +36,14 @@ The AEGIS crate is compiled with its pure-Rust backend. Serpent, Threefish, and
 Rabbit are unauthenticated primitives, so x3x derives independent per-file
 encryption and MAC keys with HKDF-SHA-512 and authenticates the header and all
 ciphertext with HMAC-SHA-512.
+
+Implementation maturity differs by algorithm. The Serpent, Threefish, and
+Rabbit dependencies are low-level hazmat primitives and have not received the
+kind of independent review expected for irreplaceable-data tooling; x3x's
+encrypt-then-MAC construction around them is also unaudited. The Ascon crate
+likewise states that it has not received a security audit. Keep independent,
+tested backups regardless of algorithm, and prefer the better-reviewed choices
+for data that cannot be replaced.
 
 Every cipher has the same interface:
 
@@ -179,6 +187,12 @@ timestamps, or other platform-specific metadata, so copy or restore those
 separately when they matter. Symbolic-link inputs are rejected because replacing
 a link would replace the link itself rather than its target.
 
+OTP cannot authenticate its result or determine whether the supplied key is the
+right one. A wrong, changed, or reused key can therefore produce a successful
+command that leaves unusable data. For anything irreplaceable, run OTP only on a
+verified backup and independently verify the transformed result before deleting
+the original.
+
 For actual one-time-pad security, key bytes must be uniformly random, at least
 as long as the message, kept secret, and never reused for any other message.
 Reusing an OTP key destroys its security.
@@ -196,8 +210,8 @@ The runner is fail-fast. It starts a separate Cargo test target for each of the
 binary's suite, name its bin-prefixed integration target directly; for example:
 
 ~~~text
-cargo test --test bin_aes -- --test-threads=1
-cargo test --test bin_keygen -- --test-threads=1
+cargo test --locked --test bin_aes -- --test-threads=1
+cargo test --locked --test bin_keygen -- --test-threads=1
 ~~~
 
 The broader library and cross-binary checks remain available through the usual
@@ -205,20 +219,25 @@ commands:
 
 ~~~text
 cargo fmt --all -- --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-targets
-cargo test --release --lib crypto::tests::production_password_kdf_round_trips -- --ignored --exact
-cargo test --test tools keymake_is_deterministic_and_not_a_repeated_short_block -- --ignored --exact
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo test --locked --all-targets
+cargo test --locked --release --lib crypto::tests::production_password_kdf_round_trips -- --ignored --exact
+cargo test --locked --test tools keymake_is_deterministic_and_not_a_repeated_short_block -- --ignored --exact
+cargo audit
 ~~~
 
-The normal tests cover all eight key-file cipher round trips across chunk
-boundaries and all eight password cipher round trips, wrong-password rejection,
-fresh salts, authenticated password metadata, format separation, and the
-standalone command wiring of every password binary. They also cover empty
-files, fresh nonces, wrong keys, tampering, no-overwrite behavior, streamed OTP,
-exact-size key generation, actual key2txt/txt2key process-level round trips,
-converter buffer boundaries, accepted text variants, malformed input rejection,
-and converter no-overwrite behavior. The explicitly ignored tests exercise a
-complete password-file round trip at its production 512 MiB cost and run
-keymake's full 256 MiB settings twice. They are separate so routine tests do not
-make those large allocations.
+The normal tests cover all eight key-file and all eight password cipher round
+trips, exact chunk boundaries, empty files, fixed container compatibility
+vectors, fresh nonces and salts, wrong keys and passwords, authenticated header
+tampering, malformed headers, truncation, trailing data, format separation,
+input immutability, no-overwrite behavior, failure cleanup, and standalone
+command wiring. They also cover streamed and atomic OTP behavior, hard-link and
+changed-path rejection, exact-size random key generation, deterministic
+keymake domain separation and XOF streaming, actual key2txt/txt2key
+process-level round trips, converter buffer boundaries, accepted text variants,
+late malformed-input cleanup, and converter no-overwrite behavior. The
+explicitly ignored tests exercise a complete password-file round trip at its
+production 512 MiB cost and run keymake's full 256 MiB settings twice. They are
+separate so routine tests do not make those large allocations. `cargo audit`
+requires the separately installed cargo-audit tool and checks the locked
+dependency graph against the current RustSec advisory database.

@@ -3,6 +3,7 @@
 mod process;
 
 use process::{assert_failure_contains, run};
+use std::fs;
 
 #[derive(Clone, Copy)]
 pub struct PasswordCipherApp {
@@ -75,6 +76,40 @@ pub fn validates_operation_before_touching_files(app: PasswordCipherApp) {
     );
 }
 
+pub fn rejects_a_missing_input_before_prompting(app: PasswordCipherApp) {
+    let directory = tempfile::tempdir().expect("create password CLI test directory");
+    let output = process::run_in(app.binary, directory.path(), &["D", "missing", "output"]);
+    assert_failure_contains(&output, "cannot open input file");
+    assert!(!directory.path().join("output").exists());
+}
+
+pub fn preserves_an_existing_output_before_prompting(app: PasswordCipherApp) {
+    let directory = tempfile::tempdir().expect("create password CLI test directory");
+    fs::write(directory.path().join("input"), b"ciphertext placeholder").expect("write input");
+    fs::write(directory.path().join("output"), b"preserve me").expect("write sentinel output");
+    let output = process::run_in(app.binary, directory.path(), &["D", "input", "output"]);
+    assert_failure_contains(&output, "refusing to overwrite existing file");
+    assert_eq!(
+        fs::read(directory.path().join("output")).expect("read sentinel output"),
+        b"preserve me"
+    );
+}
+
+pub fn rejects_nonportable_filenames_before_prompting(app: PasswordCipherApp) {
+    let directory = tempfile::tempdir().expect("create password CLI test directory");
+    fs::write(directory.path().join("input"), b"ciphertext placeholder").expect("write input");
+    for (input, output) in [
+        ("folder/input", "output"),
+        ("folder\\input", "output"),
+        ("input", "folder/output"),
+        ("input", "NUL"),
+    ] {
+        let result = process::run_in(app.binary, directory.path(), &["D", input, output]);
+        assert_failure_contains(&result, "error:");
+        assert!(!directory.path().join("output").exists());
+    }
+}
+
 macro_rules! define_password_cipher_tests {
     ($binary:expr, $command:literal) => {
         const APP: $crate::common::PasswordCipherApp = $crate::common::PasswordCipherApp {
@@ -120,6 +155,21 @@ macro_rules! define_password_cipher_tests {
         #[test]
         fn validates_operation_before_touching_files() {
             $crate::common::validates_operation_before_touching_files(APP);
+        }
+
+        #[test]
+        fn rejects_a_missing_input_before_prompting() {
+            $crate::common::rejects_a_missing_input_before_prompting(APP);
+        }
+
+        #[test]
+        fn preserves_an_existing_output_before_prompting() {
+            $crate::common::preserves_an_existing_output_before_prompting(APP);
+        }
+
+        #[test]
+        fn rejects_nonportable_filenames_before_prompting() {
+            $crate::common::rejects_nonportable_filenames_before_prompting(APP);
         }
     };
 }

@@ -31,6 +31,17 @@ fn converts_documented_decimal_text_to_binary() {
         fs::read(directory.path().join("txt2key.key")).expect("read binary key"),
         [23_u8, 255, 53, 9, 5]
     );
+    assert_eq!(
+        fs::read(directory.path().join("source.txt")).expect("read unchanged decimal source"),
+        b"23,\n255,\n53,\n9,\n5\n"
+    );
+    assert_eq!(
+        fs::read_dir(directory.path())
+            .expect("list txt2key test directory")
+            .count(),
+        2,
+        "successful conversion left a temporary artifact"
+    );
 }
 
 #[test]
@@ -159,5 +170,24 @@ fn refuses_to_overwrite_the_fixed_output() {
     assert_eq!(
         fs::read(directory.path().join("txt2key.key")).expect("read preserved output"),
         b"preserve me"
+    );
+}
+#[test]
+fn malformed_data_after_a_written_chunk_leaves_no_output_or_temporary_file() {
+    let directory = tempfile::tempdir().expect("create late-malformed txt2key test directory");
+    let mut text = "1\n".repeat(x3x::CHUNK_SIZE + 1);
+    text.push_str("999\n");
+    fs::write(directory.path().join("late-invalid.txt"), text)
+        .expect("write late-malformed decimal text");
+
+    let output = run_in(BINARY, directory.path(), &["late-invalid.txt"]);
+    assert_failure_contains(&output, "greater than 255");
+    assert!(!directory.path().join("txt2key.key").exists());
+    assert_eq!(
+        fs::read_dir(directory.path())
+            .expect("list late-malformed txt2key directory")
+            .count(),
+        1,
+        "failed conversion left a temporary artifact"
     );
 }
